@@ -1,57 +1,76 @@
 import os
 import cv2
-import numpy as np
 import json
-from pycocotools import mask as coco_mask
+import numpy as np
 
-# 示例输入：存储 mask 图像的文件夹路径以及相关信息
-mask_folder = 'mask_images/'  # 请替换为包含 mask 图像的文件夹路径
-image_id = 1  # 图像的唯一ID
-category_id = 1  # 物体类别的唯一ID
+# 输入文件夹路径
+images_folder = "Kvasir-SEG/images"  # 存放目标图像的文件夹
+masks_folder = "Kvasir-SEG/masks"    # 存放掩码图像的文件夹
+output_json_file = "Kvasir-SEG.json"  # 输出的COCO格式JSON文件
+threshold_area = 100  # 阈值面积，小于这个面积的区域将被过滤
 
-# 获取文件夹中所有 mask 图像文件的列表
-mask_files = os.listdir(mask_folder)
+# 获取目标图像文件列表
+image_files = os.listdir(images_folder)
 
-# 创建用于存储 COCO 格式标注的列表
-annotations = []
-
-# 遍历每个 mask 图像文件
-for mask_file in mask_files:
-    # 读取 mask 图像
-    mask_image = cv2.imread(os.path.join(mask_folder, mask_file), cv2.IMREAD_GRAYSCALE)
-    
-    # 将二值 mask 转换为 COCO 格式的多边形
-    segmentation = coco_mask.encode(np.asfortranarray(mask_image))
-    
-    # 计算 mask 的边界框
-    bbox = coco_mask.toBbox(segmentation)
-    
-    # 创建 COCO 格式的标注
-    annotation = {
-        'image_id': image_id,
-        'category_id': category_id,
-        'segmentation': segmentation,
-        'area': float(coco_mask.area(segmentation)),
-        'bbox': bbox.tolist(),
-        'iscrowd': 0,
-        'id': len(annotations) + 1  # 你需要为每个标注分配一个唯一的ID
-    }
-    
-    # 将标注添加到列表中
-    annotations.append(annotation)
-
-# 创建 COCO 数据集对象
-coco_dataset = {
-    'images': [],
-    'annotations': annotations,
-    'categories': [{'id': category_id, 'name': 'object'}]  # 这里只有一个类别示例
+# 初始化COCO格式的标注数据结构
+coco_data = {
+    "images": [],
+    "annotations": [],
+    "categories": [{"id": 1, "name": "polyp"}]  # 自定义目标类别名
 }
 
-# 指定要保存的 JSON 文件路径
-json_filename = 'coco_dataset.json'
+# 遍历目标图像文件列表
+for img_id, img_file in enumerate(image_files):
+    image = cv2.imread(os.path.join(images_folder, img_file))
+    height, width, _ = image.shape
 
-# 保存 COCO 数据集为 JSON 文件
-with open(json_filename, 'w') as json_file:
-    json.dump(coco_dataset, json_file, indent=4)
+    # 添加图像信息
+    coco_data["images"].append({
+        "id": img_id,
+        "file_name": img_file,
+        "width": width,
+        "height": height
+    })
 
-print(f"COCO dataset saved to {json_filename}")
+    # 获取对应的掩码图像
+    mask_file = os.path.join(masks_folder, img_file)  # 假设掩码图像的扩展名与图像相同
+
+    # 读取掩码图像
+    mask = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
+
+    # 使用阈值处理掩码图像
+    _, mask_thresholded = cv2.threshold(mask, 128, 255, cv2.THRESH_BINARY)
+
+    # 找到掩码的轮廓
+    contours, _ = cv2.findContours(mask_thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # 初始化边界框列表
+    bounding_boxes = []
+
+    # 计算每个轮廓的边界框
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area = w * h
+
+        # 过滤掉小于阈值的区域
+        if area >= threshold_area:
+            bounding_boxes.append([x, y, w, h])
+
+    # 添加注释信息
+    for bbox in bounding_boxes:
+        x, y, w, h = bbox
+        area = int(w * h)
+
+        coco_data["annotations"].append({
+            "id": len(coco_data["annotations"]),
+            "image_id": img_id,  # 将图像的唯一ID分配给注释
+            "category_id": 1,  # 目标类别的ID
+            "segmentation": [],  # 这里可以保持空列表，因为已经有边界框信息
+            "area": area,
+            "bbox": [x, y, w, h],  # 以[x, y, width, height]格式表示
+            "iscrowd": 0
+        })
+
+# 将COCO数据保存为JSON文件
+with open(output_json_file, "w") as json_file:
+    json.dump(coco_data, json_file)
